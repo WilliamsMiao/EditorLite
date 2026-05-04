@@ -11,6 +11,7 @@
 - **拼接 (Concat)**: 将多段视频无缝拼接在一起。使用成熟的 Filter Graph 重新编码机制，可完美合并具有不同编码和分辨率的视频流。
 - **背景音混音 (BGM Mixing)**: 将背景音乐轨道叠加到视频上，并支持精确的音量控制。
 - **字幕烧录 (Subtitle Burning)**: 将 `.srt` 字幕硬编码（烧录）直接压制到视频流中，以确保各播放器上的绝对兼容性。
+- **AI 字幕生成 (ASR)**: 使用底层大模型（`faster-whisper`）提取视频音频并直接翻译/识别出高精度 `.srt` 挂载文件，允许文本剧本强制对准纠错。
 
 ### 🛡️ 企业级健壮性 & 智能体接入就绪
 - **严格的接口类型推导**: 所有 API 端点均使用 `Pydantic` 设计的数据约束模型（Schema），提供自动的合法性校验（例如时间码格式、音量边界），这使得该组件极为天然地顺滑对接各种智能体（Agent）的 JSON Schema 函数调用（Function Calling）。
@@ -73,40 +74,82 @@ python -m src.cli.main bgm source.mp4 music.mp3 final.mp4 --volume 0.5
 python -m src.cli.main subtitle source.mp4 captions.srt ready_to_publish.mp4
 ```
 
+### 5. 自动生成字幕文件 (AI 音频识别)
+抽取音频并交由 Whisper 生成时间戳。可通过 `--text-script` 传入纯文本手稿来强行引导 AI 的词汇精准度。
+```bash
+python -m src.cli.main auto-subtitle source.mp4 output.srt --text-script transcript.txt --model base
+```
+
 ---
 
 ## 🤖 AI 智能体 (Agent) & 开发者 API
 
 所有位于 `src/api/video_agent.py` 的函数都被 **Pydantic** 提供严格类型约束保护。
-针对诸如 LangChain、AutoGen 或者原生的 OpenAI Function-Calling 应用框架，您可以近乎零成本地将它们导出直接作为 Tools。
+您可以近乎零成本地将它们作为普通的 Python 工具代码使用，或者作为 Tools 对接到智能体中。
 
-### 示例: 在外部业务代码 / Agent 规划树中调用
+### 示例: 业务流中的 API 链式调用
 ```python
 from src.api.video_agent import (
-    ClipTask, BGMTask, process_clip, process_bgm
+    ClipTask, GenerateSrtTask, 
+    process_clip, process_generate_srt
 )
 
-# 1. AI 决策引擎（或者业务逻辑）产生经过严格校验的任务参数
-# Pydantic 模型会自动核验 `start_time` 及 `end_time` 是否符合视频标准时间格式
+# 1. 剪切出一个片段
 clip_task = ClipTask(
     input_path="assets/raw.mp4",
     output_path="exports/short.mp4",
-    start_time="10.5",  # 兼容秒数写法, 浮点数写法, 或标准 HH:MM:SS 写法
+    start_time="10.5",  
     end_time="00:00:25"
 )
-
-# 2. 传入处理引擎执行 (该动作受到日志系统与自愈机制的包裹保护)
 clipped_file = process_clip(clip_task)
 
-# 3. 链式调用到下一个处理环节中
-bgm_task = BGMTask(
+# 2. 对刚剪好的视频自动生成配套字幕
+srt_task = GenerateSrtTask(
     video_path=clipped_file,
-    audio_path="assets/lofi.mp3",
-    output_path="exports/final_vlog.mp4",
-    volume=0.3
+    srt_path="exports/subs.srt",
+    text_prompt_path="script_draft.txt", # 可选：参考原稿
+    model_size="base"
 )
-final_file = process_bgm(bgm_task)
+srt_file = process_generate_srt(srt_task)
 ```
+
+---
+
+## 🧠 直接向 AI Agent 提供该系统库 (函数调用指南)
+
+这个项目是完全根据 Autonomous AI Agent（比如 LangChain, AutoGen 或直接调用 OpenAI Function Calling）所需的**动作接口（Action Tools）**而架构的。
+
+由于所有参数都包裹在了 `Pydantic` 模型下，您只需要一行代码就可以动态生成能够直接发给大语言模型（LLM）去解读的 JSON Schema。
+
+**如何将其喂给大语言模型:**
+
+```python
+import json
+from src.api.video_agent import ClipTask, SubtitleTask
+
+# 1. 自动生成可以直接怼进 OpenAI 'functions' 参数内的配置
+clip_tool_schema = {
+    "type": "function",
+    "function": {
+        "name": "process_clip",
+        "description": "从较长的视频文件中裁切出一段特定长短的切片视频。",
+        "parameters": ClipTask.model_json_schema() # <-- 核心在这里！
+    }
+}
+
+# 打印看看，已经是完美的 JSON 格式了
+print(json.dumps(clip_tool_schema, indent=2, ensure_ascii=False))
+```
+
+**大模型（LLM）看到的是什么？**
+得益于 `video_agent.py` 中写死的丰富的字段 `description` 注释，只要被 Schema 生成后，大模型天然就懂得每个参数该怎么填。比如：
+* *"input_path: 绝对或相对的源视频文件路径"*
+* *"start_time: 视频阶段的起始位置, 例如 '00:00:10'."*
+
+**与 Agent 对接的工作流校验:**
+1. 将刚才生成的 Tools Schema 发进 Agent 管线。
+2. Agent 一旦察觉用户的诉求（“帮我截取视频的前十秒”），会输出如下推理动作字典：`{"input_path": "a.mp4", "start_time": "00:00:00", "end_time": "00:00:10"}`。
+3. 业务代码接到 JSON，直接原封不动透传进该引擎：`process_clip(ClipTask(**agent_json_args))`，工作流完成并自愈兜底！
 
 ---
 
@@ -122,6 +165,7 @@ Avatar-beta/
 └── src/
     ├── core/
     │   ├── utils.py        # 日志组建与底层 @with_retry 指数重试与自愈核心
+    │   ├── asr_ops.py      # Whisper AI 音频识别处理器
     │   └── ffmpeg_ops.py   # 安全封装的 ffmpeg-python 子进程操控层
     ├── api/
     │   └── video_agent.py  # 强类型 Pydantic Schema 及对外封装暴露的 Agent API 管道

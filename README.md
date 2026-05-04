@@ -11,6 +11,7 @@ A powerful, robust, and highly-typed FFmpeg-backed video processing engine. Desi
 - **Concat**: Splice multiple videos together. Uses advanced filter-graph re-encoding to flawlessly merge videos with different codecs and resolutions.
 - **BGM Mixing**: Overlay background audio tracks onto videos with precise volume control.
 - **Subtitle Burning**: Hard-burn `.srt` subtitles directly into the video stream for universal compatibility.
+- **Auto-Subtitle (ASR)**: Automatically transcript spoken words in videos to highly accurate `.srt` files using AI (`faster-whisper`), with support for text alignment.
 
 ### 🛡️ Enterprise Robustness & Agent-Readiness
 - **Strict Interface Typing**: All API endpoints use `Pydantic` schemas, offering automatic validation (e.g., timecode formatting, volume constraints) and seamless exporting to JSON Schema for Agent tool configurations.
@@ -73,40 +74,82 @@ Embed an SRT file visually onto the video frame.
 python -m src.cli.main subtitle source.mp4 captions.srt ready_to_publish.mp4
 ```
 
+### 5. Auto-Generate Subtitles (ASR)
+Extract audio and transcribe it to an SRT file using Whisper. Optional `--text-script` parameter forces the AI to align with your plain text script for perfect accuracy.
+```bash
+python -m src.cli.main auto-subtitle source.mp4 output.srt --text-script transcript.txt --model base
+```
+
 ---
 
 ## 🤖 AI Agent & Developer API
 
 The functions located in `src/api/video_agent.py` are strictly typed using **Pydantic**. 
-For LangChain, AutoGen, or OpenAI function-calling implementations, you can export these schemas directly as tools.
+You can use these components as standalone programmatic functions or expose them directly to your AI Agents.
 
-### Example: Programmatic Invocation
+### Example: Programmatic Pipeline Invocation
 ```python
 from src.api.video_agent import (
-    ClipTask, BGMTask, process_clip, process_bgm
+    ClipTask, GenerateSrtTask, 
+    process_clip, process_generate_srt
 )
 
-# 1. AI or User generates the strongly-typed task
-# The Pydantic model automatically validates the `start_time` and `end_time` formats.
+# 1. Clip the video
 clip_task = ClipTask(
     input_path="assets/raw.mp4",
     output_path="exports/short.mp4",
-    start_time="10.5",  # Supports seconds, floats, or HH:MM:SS
+    start_time="10.5",  
     end_time="00:00:25"
 )
-
-# 2. Process via the Engine (Equipped with logging & self-healing)
 clipped_file = process_clip(clip_task)
 
-# 3. Chain immediately to another task
-bgm_task = BGMTask(
+# 2. Generate SRT from the clipped video 
+srt_task = GenerateSrtTask(
     video_path=clipped_file,
-    audio_path="assets/lofi.mp3",
-    output_path="exports/final_vlog.mp4",
-    volume=0.3
+    srt_path="exports/subs.srt",
+    text_prompt_path="script_draft.txt",
+    model_size="base"
 )
-final_file = process_bgm(bgm_task)
+srt_file = process_generate_srt(srt_task)
 ```
+
+---
+
+## 🧠 Using this Project as an AI Agent Tool
+
+This project is structured specifically to serve as **"Action Tools" (Function Calling)** for Autonomous AI Agents (like LangChain, AutoGen, or raw OpenAI API). 
+
+Since every tool parameter is encapsulated in a Pydantic model, you can instantly export them to JSON Schemas that the LLM understands natively.
+
+**How to feed this to your LLM:**
+
+```python
+import json
+from src.api.video_agent import ClipTask, SubtitleTask
+
+# 1. Generate the exact JSON Schema expected by OpenAI / LLMs
+clip_tool_schema = {
+    "type": "function",
+    "function": {
+        "name": "process_clip",
+        "description": "Cuts a specific segment out of a larger video file.",
+        "parameters": ClipTask.model_json_schema() # <-- The magic happens here
+    }
+}
+
+# Print it out to see the LLM-ready format!
+print(json.dumps(clip_tool_schema, indent=2))
+```
+
+**What the LLM sees:**
+Because of the Pydantic field descriptions in `video_agent.py`, the AI knows exactly what to do. It reads:
+* *"input_path: Absolute or relative path to the input video file."*
+* *"start_time: Start time for the clip, e.g., '00:00:10'."*
+
+**Agent Loop Integration Check:**
+1. Pass the generated Schemas to your Agent's `tools` array.
+2. The Agent decides to "cut a video", and outputs a JSON: `{"input_path": "a.mp4", "start_time": "10", ...}`.
+3. Pass that JSON directly into our pipeline: `process_clip(ClipTask(**agent_json_args))`.
 
 ---
 
@@ -115,12 +158,14 @@ final_file = process_bgm(bgm_task)
 ```text
 Avatar-beta/
 ├── README.md               # Documentation
+├── README_zh.md            # Chinese Documentation
 ├── requirements.txt        # Python package dependencies
 ├── logs/
 │   └── system.log          # Detailed execution & error backtrace
 └── src/
     ├── core/
     │   ├── utils.py        # Loggers & @with_retry self-healing
+    │   ├── asr_ops.py      # Whisper AI audio processing
     │   └── ffmpeg_ops.py   # Secure ffmpeg-python subprocess wrapper
     ├── api/
     │   └── video_agent.py  # Pydantic Schemas & Agent exposure pipeline

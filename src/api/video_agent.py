@@ -41,6 +41,13 @@ class SubtitleTask(BaseModel):
     srt_path: str = Field(..., description="Path to the subtitle file (.srt).")
     output_path: str = Field(..., description="Path for the output video with subtitles.")
 
+class GenerateSrtTask(BaseModel):
+    """Configuration for auto-generating SRT from video using ASR."""
+    video_path: str = Field(..., description="Path to the source video file.")
+    srt_path: str = Field(..., description="Path where the generated SRT file will be saved.")
+    text_prompt_path: Optional[str] = Field(None, description="Optional path to a plain text file containing the exact transcript, used as a prompt to guide the ASR aligner.")
+    model_size: str = Field("base", description="Whisper model size: tiny, base, small, medium, large-v3.")
+
 def process_clip(task: ClipTask) -> str:
     """
     Cuts a specific segment out of a larger video file.
@@ -68,3 +75,11 @@ def process_subtitle(task: SubtitleTask) -> str:
     Requires FFmpeg to re-encode the video stream.
     """
     return ops.add_subtitles(task.video_path, task.srt_path, task.output_path)
+
+def process_generate_srt(task: GenerateSrtTask) -> str:
+    """
+    Auto-generates an SRT file from a video by extracting its audio and running local Whisper ASR.
+    Optionally takes a plain text prompt to force-align the output slightly more to the script.
+    """
+    from src.core.asr_ops import generate_srt_from_video
+    return generate_srt_from_video(task.video_path, task.srt_path, task.text_prompt_path, task.model_size)

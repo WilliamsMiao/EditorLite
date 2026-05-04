@@ -1,8 +1,8 @@
 import typer
 from typing import List
 from src.api.video_agent import (
-    ClipTask, ConcatTask, BGMTask, SubtitleTask,
-    process_clip, process_concat, process_bgm, process_subtitle
+    ClipTask, ConcatTask, BGMTask, SubtitleTask, GenerateSrtTask,
+    process_clip, process_concat, process_bgm, process_subtitle, process_generate_srt
 )
 
 app = typer.Typer(help="Video Processing CLI & Agent Component")
@@ -51,6 +51,18 @@ def apply_subtitle(
     task = SubtitleTask(video_path=video, srt_path=srt_file, output_path=output)
     result = process_subtitle(task)
     typer.echo(f"Success! Video with subtitles saved to: {result}")
+
+@app.command("auto-subtitle")
+def auto_subtitle(
+    video: str = typer.Argument(..., help="Path to source video"),
+    output_srt: str = typer.Argument(..., help="Path to save generated SRT file"),
+    text_script: str = typer.Option(None, help="Path to plain text script to guide vocabulary and alignment"),
+    model: str = typer.Option("base", help="Whisper model size (tiny, base, small, medium)")
+):
+    """Auto-generate SRT subtitles from video audio using AI (Whisper)."""
+    task = GenerateSrtTask(video_path=video, srt_path=output_srt, text_prompt_path=text_script, model_size=model)
+    result = process_generate_srt(task)
+    typer.echo(f"Success! Auto-generated SRT saved to: {result}")
 
 if __name__ == "__main__":
     app()
