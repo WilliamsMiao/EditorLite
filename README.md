@@ -1,5 +1,7 @@
 # 🎬 Avatar Video Processing Engine
 
+🌍 *Read this in other languages: [English](README.md), [简体中文](README_zh.md).*
+
 A powerful, robust, and highly-typed FFmpeg-backed video processing engine. Designed explicitly to be operated via **Command Line Interface (CLI)** or natively invoked by **AI Agents (LLMs)** and business backend code.
 
 ---
